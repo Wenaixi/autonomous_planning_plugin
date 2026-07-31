@@ -61,6 +61,16 @@ class GoalDatabase:
     # Database schema version for migrations
     SCHEMA_VERSION = 1
 
+    # 白名单字段：update_goal 允许写入的列名（其它列名直接抛 ValueError）
+    _ALLOWED_UPDATE_FIELDS = frozenset({
+        "name", "description", "goal_type", "priority",
+        "status", "progress", "deadline",
+        "interval_seconds", "conditions", "parameters",
+        "last_executed_at", "execution_count",
+        # 注：created_at 故意不在白名单（创建后不应被覆盖）；
+        #     goal_id / chat_id / creator_id 是主键/外键字段，绝不可改。
+    })
+
     def __init__(self, db_path: str = "data/goals.db", backup_on_init: bool = True, timezone: str = "Asia/Shanghai"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,8 +78,12 @@ class GoalDatabase:
         # Initialize timezone manager
         self.tz_manager = TimezoneManager(timezone)
 
-        # Thread-local storage for connections
-        self._local = threading.local()
+        # 所有线程的连接注册表（thread_id -> sqlite3.Connection）。
+        # 原实现用 threading.local，close() 只能关当前线程的连接，
+        # 其它线程的连接会泄漏 —— close() 改成遍历注册表关闭。
+        self._connections: Dict[int, sqlite3.Connection] = {}
+        # 注册表自身的写入锁（_get_connection 内部仍各用各的 conn，无竞争）
+        self._connections_lock = threading.Lock()
 
         # Create backup if database exists and backup is requested
         if backup_on_init and self.db_path.exists():
@@ -89,20 +103,33 @@ class GoalDatabase:
         Returns:
             SQLite connection for current thread
         """
-        if not hasattr(self._local, 'connection'):
-            self._local.connection = sqlite3.connect(
-                str(self.db_path),
-                check_same_thread=False,
-                timeout=30.0  # 30 second timeout for locks
-            )
-            # Enable foreign keys
-            self._local.connection.execute("PRAGMA foreign_keys = ON")
-            # Use WAL mode for better concurrency
-            self._local.connection.execute("PRAGMA journal_mode = WAL")
-            # Return rows as dictionaries
-            self._local.connection.row_factory = sqlite3.Row
+        tid = threading.get_ident()
+        # 快路径：当前线程已有连接
+        conn = self._connections.get(tid)
+        if conn is not None:
+            return conn
 
-        return self._local.connection
+        conn = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+            timeout=30.0  # 30 second timeout for locks
+        )
+        # Enable foreign keys
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Use WAL mode for better concurrency
+        conn.execute("PRAGMA journal_mode = WAL")
+        # Return rows as dictionaries
+        conn.row_factory = sqlite3.Row
+
+        with self._connections_lock:
+            # 重复进入同一线程时复用现有连接（理论不会发生，但安全起见）
+            existing = self._connections.get(tid)
+            if existing is not None:
+                conn.close()
+                return existing
+            self._connections[tid] = conn
+
+        return conn
 
     @contextmanager
     def _transaction(self):
@@ -394,13 +421,25 @@ class GoalDatabase:
 
         Args:
             goal_id: Goal identifier
-            **kwargs: Fields to update
+            **kwargs: Fields to update (must be in ``_ALLOWED_UPDATE_FIELDS``)
 
         Returns:
             True if goal was updated, False if not found
+
+        Raises:
+            ValueError: if any kwarg key is not in the allowed whitelist
+                (defence against SQL injection via dynamic column names).
         """
         if not kwargs:
             return False
+
+        # 校验：kwargs key 必须全部在白名单内，否则直接抛 ValueError
+        unknown = set(kwargs.keys()) - self._ALLOWED_UPDATE_FIELDS
+        if unknown:
+            raise ValueError(
+                f"update_goal 收到未知字段 {sorted(unknown)!r}; "
+                f"允许的字段: {sorted(self._ALLOWED_UPDATE_FIELDS)!r}"
+            )
 
         # Build UPDATE query dynamically
         set_clauses = []
@@ -532,11 +571,22 @@ class GoalDatabase:
         return data
 
     def close(self) -> None:
-        """Close database connection for current thread."""
-        if hasattr(self._local, 'connection'):
-            self._local.connection.close()
-            delattr(self._local, 'connection')
-            logger.debug("Closed database connection")
+        """Close every thread's database connection.
+
+        原实现用 ``threading.local``，close() 只能看到调用线程自己的连接，
+        其它线程持有的连接会泄漏并继续持有文件锁。现已改为遍历
+        ``_connections`` 注册表关闭所有线程的连接。
+        """
+        with self._connections_lock:
+            conns = list(self._connections.items())
+            self._connections.clear()
+        for tid, conn in conns:
+            try:
+                conn.close()
+                logger.debug(f"Closed database connection for thread {tid}")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(f"关闭线程 {tid} 的连接失败: {exc}")
+        logger.debug(f"Closed {len(conns)} database connection(s)")
 
     def vacuum(self) -> None:
         """Optimize database by running VACUUM.

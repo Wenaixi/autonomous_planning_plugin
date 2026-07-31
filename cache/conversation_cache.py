@@ -15,6 +15,7 @@
     ...     cache.mark_injected("chat_123")
 """
 
+from collections import OrderedDict
 from typing import Any, Dict, Optional
 import logging
 import threading
@@ -39,6 +40,8 @@ class ConversationCache:
 
     参数：
         expire_seconds: 缓存过期时间（秒，默认：1800）
+        max_keys: 最大缓存 chat 数；``None`` 表示不限制（向后兼容）。
+            超限时按 LRU（最久未 add_message 的）淘汰。
 
     使用示例：
         >>> cache = ConversationCache(expire_seconds=1800)
@@ -48,10 +51,23 @@ class ConversationCache:
         ...     cache.mark_injected("chat_123")
     """
 
-    def __init__(self, expire_seconds: int = 1800):
-        self.cache: Dict[str, Dict[str, Any]] = {}
+    def __init__(self, expire_seconds: int = 1800, max_keys: Optional[int] = None):
+        # OrderedDict：插入顺序即 LRU 顺序；move_to_end / popitem(last=False) 才能正确淘汰
+        self.cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self.expire_seconds = expire_seconds
+        self.max_keys = max_keys
         self.lock = threading.Lock()
+
+    def _evict_lru_if_needed(self) -> None:
+        """若超出 max_keys，淘汰最久未写入的条目。
+
+        调用方须已持有 ``self.lock``。
+        """
+        if self.max_keys is None:
+            return
+        while len(self.cache) > self.max_keys:
+            evicted_chat, _ = self.cache.popitem(last=False)
+            logger.debug(f"LRU 淘汰对话缓存条目: {evicted_chat}")
 
     def add_message(self, chat_id: str) -> None:
         """Record a new message in the conversation.
@@ -71,6 +87,9 @@ class ConversationCache:
                 }
 
             self.cache[chat_id]["message_count"] += 1
+            # 写入即视为「最近使用」，挪到 OrderedDict 末尾；eviction 会从头部弹
+            self.cache.move_to_end(chat_id)
+            self._evict_lru_if_needed()
 
     def should_inject(self, chat_id: str, message_threshold: int = 5,
                      time_threshold: int = 300) -> bool:
