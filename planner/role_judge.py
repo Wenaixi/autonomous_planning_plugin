@@ -150,7 +150,7 @@ async def judge_schedule_request(
     try:
         result = await plugin.ctx.llm.generate(
             prompt=prompt,
-            model=model,
+            task_name=model,
             temperature=temperature,
             max_tokens=max_tokens,
         )

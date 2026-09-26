@@ -282,7 +282,7 @@ class ScheduleAutoScheduler:
 
             llm_result = await self.plugin.ctx.llm.generate(
                 prompt=prompt,
-                model=task_name,
+                task_name=task_name,
                 max_tokens=infer_max_tokens,
                 temperature=infer_temperature,
             )

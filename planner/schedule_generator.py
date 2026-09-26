@@ -786,7 +786,7 @@ class ScheduleGenerator:
 
         llm_result = await self._plugin.ctx.llm.generate(
             prompt=prompt,
-            model=task_name,
+            task_name=task_name,
             max_tokens=max_tokens,
             temperature=temperature,
         )
