@@ -265,6 +265,8 @@ class AutonomousPlanningPluginV4(MaiBotPlugin):
             "min_description_length": cfg.min_description_length,
             "max_description_length": cfg.max_description_length,
             "max_tokens": cfg.max_tokens,
+            "generation_timeout": cfg.generation_timeout,
+            "llm_timeout_retries": cfg.llm_timeout_retries,
             "custom_prompt": cfg.custom_prompt,
             "timezone": cfg.timezone,
             "llm_task_name": cfg.llm_task_name,

@@ -196,6 +196,7 @@ class ScheduleGeneratorConfig:
             'quality_threshold': self.quality_threshold,
             'max_tokens': self.max_tokens,
             'generation_timeout': self.generation_timeout,
+            'llm_timeout_retries': self.llm_timeout_retries,
             'custom_prompt': self.custom_prompt,
             'cache_ttl': self.cache_ttl,
             'cache_max_size': self.cache_max_size,
