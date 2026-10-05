@@ -23,6 +23,7 @@ min_description_length = 20
 max_description_length = 50
 max_tokens = 8192
 generation_timeout = 180.0
+llm_timeout_retries = 3
 recent_schedule_days = 3
 auto_schedule_enabled = true
 auto_schedule_time = "00:30"

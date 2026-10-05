@@ -70,6 +70,8 @@ class ScheduleGeneratorConfig:
         self.use_multi_round = config_dict.get('use_multi_round', True)
         self.max_rounds = config_dict.get('max_rounds', 2)
         self.quality_threshold = config_dict.get('quality_threshold', 0.85)
+        # 超时专用重试次数（不占用 max_rounds 质量迭代轮数）
+        self.llm_timeout_retries = int(config_dict.get('llm_timeout_retries', 3))
 
         # === 模型配置 ===
         self.max_tokens = config_dict.get('max_tokens', 8192)

@@ -664,10 +664,17 @@ class ScheduleGenerator:
         """多轮生成：如果第一次质量不佳，使用反馈改进"""
         max_rounds = self.config.max_rounds
         quality_threshold = self.config.quality_threshold
+        timeout_retries = int(self.config.llm_timeout_retries)
 
         best_schedule = None
         best_score = 0
         validation_warnings = []
+
+        # 超时专用重试：超时属于网络/上游抖动型错误，不应计入 max_rounds 的
+        # 质量迭代轮数，也无需重新构造带反馈的 prompt；直接退避重试原 prompt。
+        # 退避：5s -> 15s -> 35s（固定 3 次时的节奏），撞上 429 限流窗口的
+        # 概率随间隔拉长而下降。
+        timeout_retries_left = max(timeout_retries, 0)
 
         for round_num in range(1, max_rounds + 1):
             logger.debug(f"🔄 第{round_num}轮生成...")
@@ -713,7 +720,18 @@ class ScheduleGenerator:
                 raise
             except LLMTimeoutError as e:
                 # 超时是网络抖动型错误，可重试
-                logger.warning(f"第{round_num}轮 LLM 超时，将重试: {e}")
+                if timeout_retries_left > 0:
+                    timeout_retries_left -= 1
+                    # 5s / 15s / 35s 递增退避，给上游限流窗口留出恢复时间
+                    backoff = 5 * (2 ** (timeout_retries - timeout_retries_left - 1)) + 5 * (timeout_retries - timeout_retries_left)
+                    backoff = min(backoff, 60)
+                    logger.warning(
+                        f"第{round_num}轮 LLM 超时（剩余超时重试 {timeout_retries_left} 次），"
+                        f"{backoff}s 后重试: {e}"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.warning(f"第{round_num}轮 LLM 超时，超时重试已耗尽: {e}")
                 continue
             except Exception as e:
                 # 业务可重试错误（响应解析失败 / Schema 校验失败等）
@@ -784,11 +802,16 @@ class ScheduleGenerator:
         if self._plugin is None:
             raise LLMError("ScheduleGenerator 未注入 plugin 实例，无法调用 ctx.llm.generate")
 
+        # 透传 timeout_ms：宿主 cap.call RPC 默认 30s，日程生成这类大 token 请求
+        # 在上游限流时必然超时；这里按 generation_timeout 放大 RPC 超时（SDK 通过
+        # kwargs 透传 timeout_ms，runner 侧 _rpc_call 会消费它）
+        timeout_ms = int(float(self.config.generation_timeout) * 1000)
         llm_result = await self._plugin.ctx.llm.generate(
             prompt=prompt,
             task_name=task_name,
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout_ms=timeout_ms,
         )
         success = bool(llm_result.get("success", False))
         response = str(llm_result.get("response", ""))

@@ -262,6 +262,17 @@ class ScheduleConfig(PluginConfigBase):
             "order": 20,
         },
     )
+    llm_timeout_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="LLM 调用超时后的额外重试次数（不占用 max_rounds 质量迭代轮数）。",
+        json_schema_extra={
+            "label": "超时重试次数",
+            "hint": "0-10；超时后按 5s 起递增退避重试；推荐 3",
+            "order": 21,
+        },
+    )
     recent_schedule_days: int = Field(
         default=3,
         ge=1,
