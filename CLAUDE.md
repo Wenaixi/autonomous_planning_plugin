@@ -1,5 +1,13 @@
 # 自主规划插件 v4（xuqian13.autonomous-planning-plugin-v4）
 
+## 官方上游与版本溯源
+- 官方仓库（Upstream Repository）：https://github.com/xuqian13/autonomous_planning_plugin
+- 官方作者（Author / Maintainer）：xuqian13
+- 功能定位：麦麦自主日常规划与活动日程引擎
+- 本地演进定位：基于官方上游最新版本，融入本地生产环境兼容性定制与稳定性加固。
+- 本地专属定制：本地修复 DeepSeek 在 8192 token 处的截断空白 bug，确保每日日程正常生成。
+
+
 源: GitHub `xuqian13`
 
 ## 主人改过的关键文件
